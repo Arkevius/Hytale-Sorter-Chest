@@ -18,6 +18,7 @@ import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
@@ -61,6 +62,7 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
     @Override
     public void delayedTick(float dt, int pass, Store<ChunkStore> store) {
         if (store.getEntityCountFor(itemContainerType) == 0) return;
+        int storeHash = System.identityHashCode(store);
 
         // SpatialResource is populated by Hytale's ItemContainerBlockSpatialSystem
         // and maps every container-block entity to its world-space Vector3d.
@@ -102,14 +104,13 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         if (sources.isEmpty()) return;
 
         for (Entry src : sources) {
-            sortOneChest(src, all);
+            sortOneChest(src, all, storeHash);
         }
     }
 
-    private void sortOneChest(Entry src, List<Entry> all) {
+    private void sortOneChest(Entry src, List<Entry> all, int storeHash) {
         Vector3d srcPos = src.position();
         short srcCap = src.container().getCapacity();
-        int itemsMoved = 0;
 
         List<Entry> candidates = all.stream()
             .filter(t -> t != src)
@@ -118,32 +119,66 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
             .toList();
         if (candidates.isEmpty()) return;
 
+        int itemsMovedTotal = 0;
+        // { destination position -> items deposited there this pass }. LinkedHashMap so
+        // log order matches routing order (first-fit), not hash iteration order.
+        Map<Vector3d, Integer> movesByDestination = new LinkedHashMap<>();
+
         for (short srcSlot = 0; srcSlot < srcCap; srcSlot++) {
             ItemStack before = src.container().getItemStack(srcSlot);
             if (before == null || before.isEmpty()) continue;
 
-            ItemContainer[] targets = candidates.stream()
+            List<Entry> slotTargets = candidates.stream()
                 .filter(t -> t.container().containsItemStacksStackableWith(before))
-                .map(Entry::container)
-                .toArray(ItemContainer[]::new);
-            if (targets.length == 0) continue;
+                .toList();
+            if (slotTargets.isEmpty()) continue;
 
-            int beforeQty = before.getQuantity();
-            try {
-                src.container().moveItemStackFromSlot(srcSlot, targets);
-            } catch (Throwable t) {
-                logger.at(Level.WARNING).log(
-                    "moveItemStackFromSlot failed for slot %d: %s", (int) srcSlot, t);
-                continue;
+            // Route per-target so we can attribute how much each destination received.
+            // moveItemStackFromSlot with an array would distribute, but hides the split.
+            for (Entry target : slotTargets) {
+                ItemStack slotBefore = src.container().getItemStack(srcSlot);
+                if (slotBefore == null || slotBefore.isEmpty()) break;
+                int beforeQty = slotBefore.getQuantity();
+
+                try {
+                    src.container().moveItemStackFromSlot(srcSlot, new ItemContainer[]{ target.container() });
+                } catch (Throwable t) {
+                    logger.at(Level.WARNING).log(
+                        "moveItemStackFromSlot failed for slot %d -> %s: %s",
+                        (int) srcSlot, formatPos(target.position()), t);
+                    continue;
+                }
+
+                ItemStack slotAfter = src.container().getItemStack(srcSlot);
+                int afterQty = (slotAfter == null || slotAfter.isEmpty()) ? 0 : slotAfter.getQuantity();
+                int delta = beforeQty - afterQty;
+                if (delta > 0) {
+                    movesByDestination.merge(target.position(), delta, Integer::sum);
+                    itemsMovedTotal += delta;
+                }
             }
-            ItemStack after = src.container().getItemStack(srcSlot);
-            int afterQty = (after == null || after.isEmpty()) ? 0 : after.getQuantity();
-            itemsMoved += (beforeQty - afterQty);
         }
 
-        if (itemsMoved > 0) {
-            logger.at(Level.INFO).log("[sort] SortingChest: itemsMoved=%d", itemsMoved);
+        if (itemsMovedTotal == 0) return;
+
+        StringBuilder destinations = new StringBuilder();
+        boolean first = true;
+        for (Map.Entry<Vector3d, Integer> move : movesByDestination.entrySet()) {
+            if (!first) destinations.append(", ");
+            destinations.append(formatPos(move.getKey())).append('=').append(move.getValue());
+            first = false;
         }
+        logger.at(Level.INFO).log(
+            "[sort] store=%08x src=%s itemsMoved=%d dest=[%s]",
+            storeHash, formatPos(srcPos), itemsMovedTotal, destinations.toString());
+    }
+
+    private static String formatPos(Vector3d pos) {
+        if (pos == null) return "?";
+        return String.format("(%d,%d,%d)",
+            (int) Math.floor(pos.getX()),
+            (int) Math.floor(pos.getY()),
+            (int) Math.floor(pos.getZ()));
     }
 
     private static boolean withinRadius(Vector3d a, Vector3d b) {
