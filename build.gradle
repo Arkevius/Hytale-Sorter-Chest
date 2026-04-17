@@ -1,0 +1,95 @@
+plugins {
+    id 'java'
+}
+
+group = maven_group
+version = mod_version
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { url "https://maven.hytale.com/${hytale_patchline}" }
+    maven { url "https://maven.hytale.com/pre-release" }
+}
+
+dependencies {
+    compileOnly "com.hypixel.hytale:Server:${hytale_build}"
+}
+
+processResources {
+    inputs.property 'mod_id', mod_id
+    inputs.property 'mod_name', mod_name
+    inputs.property 'mod_version', mod_version
+    inputs.property 'hytale_build', hytale_build
+
+    filesMatching('manifest.json') {
+        expand(
+            mod_id: mod_id,
+            mod_name: mod_name,
+            mod_version: mod_version,
+            hytale_build: hytale_build
+        )
+    }
+}
+
+jar {
+    archiveBaseName = mod_id
+}
+
+tasks.register('installLocal') {
+    description = 'Copies the built jar into the local Hytale UserData mods directory for testing.'
+    group = 'hytale'
+    dependsOn jar
+
+    doLast {
+        def userData = System.getenv('HYTALE_USERDATA')
+        if (userData == null) {
+            def appdata = System.getenv('APPDATA')
+            def home = System.getProperty('user.home')
+            def osName = System.getProperty('os.name').toLowerCase()
+            if (appdata != null) {
+                userData = "$appdata/Hytale/UserData"
+            } else if (osName.contains('mac')) {
+                userData = "$home/Library/Application Support/Hytale/UserData"
+            } else {
+                userData = "$home/.config/Hytale/UserData"
+            }
+        }
+
+        // PluginManager scans <UserData>/mods/ for .jar plugins. The jar
+        // registers itself both as a plugin (via Main) and as an asset pack
+        // (IncludesAssetPack=true + assets at the jar root), so nothing else
+        // needs to land in mods/.
+        def modsRoot = file("$userData/mods")
+        modsRoot.mkdirs()
+
+        def jarFile = jar.archiveFile.get().asFile
+        if (!jarFile.exists()) {
+            throw new GradleException("Built jar missing at ${jarFile}. Run './gradlew build' first.")
+        }
+        def destJar = new File(modsRoot, jarFile.name)
+        java.nio.file.Files.copy(
+            jarFile.toPath(),
+            destJar.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING
+        )
+        if (!destJar.exists()) {
+            throw new GradleException("Jar copy reported success but ${destJar} is missing.")
+        }
+
+        // Nuke any prior standalone pack dir from the old two-artifact layout
+        // so Hytale doesn't double-register the pack.
+        def stalePackDir = file("$userData/mods/$mod_id")
+        if (stalePackDir.exists()) {
+            delete stalePackDir
+            println "Removed stale pack directory: ${stalePackDir}"
+        }
+
+        println "Installed plugin jar: ${destJar} (${destJar.length()} bytes)"
+    }
+}

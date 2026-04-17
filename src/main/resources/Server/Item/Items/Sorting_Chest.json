@@ -1,0 +1,73 @@
+{
+  "TranslationProperties": {
+    "Name": "server.items.Sorting_Chest.name",
+    "Description": "server.items.Sorting_Chest.description"
+  },
+  "PlayerAnimationsId": "Block",
+  "Categories": [
+    "Furniture.Containers"
+  ],
+  "Icon": "Icons/ItemsGenerated/Furniture_Lumberjack_Chest_Small.png",
+  "IconProperties": {
+    "Rotation": [22.5, 45, 22.5],
+    "Scale": 0.55,
+    "Translation": [0, -15]
+  },
+  "BlockType": {
+    "Material": "Solid",
+    "DrawType": "Model",
+    "Opacity": "Transparent",
+    "CustomModel": "Blocks/Decorative_Sets/Lumberjack/SmallChest.blockymodel",
+    "CustomModelTexture": [
+      { "Texture": "Blocks/Decorative_Sets/Lumberjack/SmallChest_Texture.png", "Weight": 1 }
+    ],
+    "BlockParticleSetId": "Wood",
+    "BlockSoundSetId": "Wood",
+    "ParticleColor": "#7a5cff",
+    "Flags": { "IsUsable": true },
+    "Gathering": { "Breaking": { "GatherType": "Woods" } },
+    "VariantRotation": "NESW",
+    "Supporting": { "Up": [{ "FaceType": "Full" }] },
+    "Support": { "Down": [{ "FaceType": "Full" }] },
+    "State": {
+      "Definitions": {
+        "CloseWindow": {
+          "InteractionSoundEventId": "SFX_Chest_Wooden_Close",
+          "CustomModelAnimation": "Blocks/Animations/Chest/Chest_Close.blockyanim"
+        },
+        "OpenWindow": {
+          "InteractionSoundEventId": "SFX_Chest_Wooden_Open",
+          "CustomModelAnimation": "Blocks/Animations/Chest/Chest_Open.blockyanim"
+        }
+      }
+    },
+    "BlockEntity": {
+      "Components": {
+        "ItemContainerBlock": { "Capacity": 27 }
+      }
+    },
+    "InteractionHint": "server.interactionHints.openDoor",
+    "Interactions": { "Use": "Open_Container" }
+  },
+  "Tags": {
+    "Type": ["Furniture"]
+  },
+  "Recipe": {
+    "TimeSeconds": 4,
+    "Input": [
+      { "ItemId": "Wood_Redwood_Planks", "Quantity": 4 },
+      { "ItemId": "Ingredient_Bar_Iron", "Quantity": 2 },
+      { "ItemId": "Ingredient_Void_Essence", "Quantity": 4 }
+    ],
+    "BenchRequirement": [
+      {
+        "Id": "Arcanebench",
+        "Type": "Crafting",
+        "Categories": ["Arcane_Misc"]
+      }
+    ]
+  },
+  "ItemSoundSetId": "ISS_Blocks_Wood",
+  "ItemLevel": 5,
+  "MaxStack": 25
+}

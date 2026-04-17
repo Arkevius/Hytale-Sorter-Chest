@@ -1,0 +1,19 @@
+{
+  "Group": "Arkevius",
+  "Name": "${mod_name}",
+  "Version": "${mod_version}",
+  "Description": "Auto-sorting chest for Hytale — drop items, close the lid, stacks flow to matching chests within 100 blocks.",
+  "Authors": [
+    {
+      "Name": "Arkevius",
+      "Url": "https://github.com/Arkevius/Hytale-Sorter-Chest"
+    }
+  ],
+  "Website": "https://github.com/Arkevius/Hytale-Sorter-Chest",
+  "ServerVersion": "${hytale_build}",
+  "Dependencies": {},
+  "OptionalDependencies": {},
+  "DisabledByDefault": false,
+  "Main": "dev.sorter.sortingchest.SortingChestPlugin",
+  "IncludesAssetPack": true
+}
