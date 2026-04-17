@@ -9,7 +9,6 @@ import com.hypixel.hytale.component.spatial.SpatialResource;
 import com.hypixel.hytale.component.system.DelayedSystem;
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.math.util.ChunkUtil;
-import com.hypixel.hytale.math.vector.Vector3d;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
 import com.hypixel.hytale.server.core.inventory.ItemStack;
 import com.hypixel.hytale.server.core.inventory.container.ItemContainer;
@@ -94,9 +93,10 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
 
         // SpatialResource is populated by Hytale's ItemContainerBlockSpatialSystem
         // and maps every container-block entity to its world-space position. The
-        // underlying Vector3d type differs across Hytale builds; we adapt to a
-        // neutral Pos at the boundary here (next commit will swap this inline
-        // adapter for the reflective shim in SpatialPositions).
+        // Vector3d type returned by SpatialData.getVector differs across Hytale
+        // builds (hytale-native on release, org.joml on pre-release), so we go
+        // through SpatialPositions which resolves the right MethodHandle once
+        // and returns our neutral Pos.
         SpatialResource<Ref<ChunkStore>, ChunkStore> spatial = store.getResource(spatialType);
         Map<Integer, Pos> positionsByRefIndex = new HashMap<>();
         if (spatial != null) {
@@ -105,8 +105,13 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
             for (int i = 0; i < n; i++) {
                 Ref<ChunkStore> r = data.getData(i);
                 if (r == null) continue;
-                Vector3d v = data.getVector(i);
-                positionsByRefIndex.put(r.getIndex(), new Pos(v.getX(), v.getY(), v.getZ()));
+                try {
+                    positionsByRefIndex.put(r.getIndex(), SpatialPositions.read(data, i));
+                } catch (Throwable t) {
+                    // Propagate so delayedTick's catch-all (next commit) can mark the
+                    // mod disabled cleanly instead of every tick re-throwing.
+                    throw new RuntimeException("SpatialPositions.read failed", t);
+                }
             }
         }
 
