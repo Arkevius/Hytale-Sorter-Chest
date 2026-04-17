@@ -9,8 +9,6 @@ import java.util.logging.Level;
 
 public final class SortingChestPlugin extends JavaPlugin {
 
-    private ComponentType<ChunkStore, SortingChestBlock> sortingChestType;
-
     public SortingChestPlugin(JavaPluginInit init) {
         super(init);
     }
@@ -18,8 +16,9 @@ public final class SortingChestPlugin extends JavaPlugin {
     @Override
     protected void setup() {
         super.setup();
-        this.sortingChestType = getChunkStoreRegistry().registerComponent(
-            SortingChestBlock.class, "Arkevius_SortingChestBlock", SortingChestBlock.CODEC);
+        ComponentType<ChunkStore, SortingChestBlock> sortingChestType =
+            getChunkStoreRegistry().registerComponent(
+                SortingChestBlock.class, "Arkevius_SortingChestBlock", SortingChestBlock.CODEC);
         getChunkStoreRegistry().registerSystem(
             new SortingChestSystem(getLogger(), sortingChestType));
     }

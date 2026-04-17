@@ -22,6 +22,7 @@ import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
 import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -56,9 +57,13 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
     private final HytaleLogger logger;
     private final ComponentType<ChunkStore, SortingChestBlock> sortingChestType;
     private final ComponentType<ChunkStore, ItemContainerBlock> itemContainerType;
-    // Populated lazily the first time a given store ticks. WeakHashMap because Hytale
-    // is free to destroy and rebuild a store without notifying us.
-    private final Map<Store<ChunkStore>, World> worldByStore = new WeakHashMap<>();
+    private final ResourceType<ChunkStore, SpatialResource<Ref<ChunkStore>, ChunkStore>> spatialType;
+    // Populated lazily the first time a given store ticks. WeakHashMap so destroyed
+    // stores don't linger; synchronized wrapper because the engine is free to fire
+    // delayedTick for different stores on different threads, and computeIfAbsent
+    // mutates the map.
+    private final Map<Store<ChunkStore>, World> worldByStore =
+        Collections.synchronizedMap(new WeakHashMap<>());
 
     private record Entry(
         Ref<ChunkStore> ref,
@@ -73,7 +78,9 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         super(SORT_INTERVAL_SEC);
         this.logger = logger;
         this.sortingChestType = sortingChestType;
-        this.itemContainerType = BlockModule.get().getItemContainerBlockComponentType();
+        BlockModule blockModule = BlockModule.get();
+        this.itemContainerType = blockModule.getItemContainerBlockComponentType();
+        this.spatialType = blockModule.getItemContainerSpatialResourceType();
     }
 
     @Override
@@ -87,8 +94,6 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
 
         // SpatialResource is populated by Hytale's ItemContainerBlockSpatialSystem
         // and maps every container-block entity to its world-space Vector3d.
-        ResourceType<ChunkStore, SpatialResource<Ref<ChunkStore>, ChunkStore>> spatialType =
-            BlockModule.get().getItemContainerSpatialResourceType();
         SpatialResource<Ref<ChunkStore>, ChunkStore> spatial = store.getResource(spatialType);
         Map<Integer, Vector3d> positionsByRefIndex = new HashMap<>();
         if (spatial != null) {
@@ -151,6 +156,10 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         // { destination position -> items deposited there this pass }. LinkedHashMap so
         // log order matches routing order (first-fit), not hash iteration order.
         Map<Vector3d, Integer> movesByDestination = new LinkedHashMap<>();
+        // Reused across all moveItemStackFromSlot calls for this source. The API takes
+        // an ItemContainer[] but we always pass exactly one target at a time so we can
+        // attribute per-destination deltas.
+        ItemContainer[] singleTarget = new ItemContainer[1];
 
         for (short srcSlot = 0; srcSlot < srcCap; srcSlot++) {
             ItemStack before = src.container().getItemStack(srcSlot);
@@ -168,8 +177,9 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
                 if (slotBefore == null || slotBefore.isEmpty()) break;
                 int beforeQty = slotBefore.getQuantity();
 
+                singleTarget[0] = target.container();
                 try {
-                    src.container().moveItemStackFromSlot(srcSlot, new ItemContainer[]{ target.container() });
+                    src.container().moveItemStackFromSlot(srcSlot, singleTarget);
                 } catch (Throwable t) {
                     logger.at(Level.WARNING).log(
                         "moveItemStackFromSlot failed for slot %d -> %s: %s",
