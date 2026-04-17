@@ -74,23 +74,12 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         this.logger = logger;
         this.sortingChestType = sortingChestType;
         this.itemContainerType = BlockModule.get().getItemContainerBlockComponentType();
-        logger.at(Level.INFO).log("[sort-diag] SortingChestSystem constructed, interval=%.1fs", SORT_INTERVAL_SEC);
-    }
-
-    @Override
-    public void onSystemRegistered() {
-        logger.at(Level.INFO).log("[sort-diag] SortingChestSystem registered");
     }
 
     @Override
     public void delayedTick(float dt, int pass, Store<ChunkStore> store) {
+        if (store.getEntityCountFor(itemContainerType) == 0) return;
         int storeHash = System.identityHashCode(store);
-        int containerCount = store.getEntityCountFor(itemContainerType);
-        int sortingCount = store.getEntityCountFor(sortingChestType);
-        logger.at(Level.INFO).log(
-            "[sort-diag] delayedTick store=%08x containers=%d sortingChests=%d",
-            storeHash, containerCount, sortingCount);
-        if (containerCount == 0) return;
 
         // We only need the World for block-type lookups during legacy-marker migration.
         // Null is fine — just means we can't migrate on THIS store this tick.
@@ -130,7 +119,7 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
                     cmdBuf.addComponent(ref, sortingChestType);
                     sortingChest = true;
                     logger.at(Level.INFO).log(
-                        "[sort-diag] back-attached SortingChestBlock at %s", formatPos(pos));
+                        "[sort] migrated legacy Sorting Chest marker at %s", formatPos(pos));
                 }
                 Entry entry = new Entry(ref, pos, c, sortingChest);
                 all.add(entry);
