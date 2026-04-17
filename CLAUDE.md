@@ -84,3 +84,73 @@ src/main/resources/
 ```
 
 `processResources` templates `manifest.json` with `mod_name`, `mod_version`, and `hytale_build` from `gradle.properties`.
+
+
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:b9766037 -->
+## Beads Issue Tracker
+
+This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+
+### Quick Reference
+
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>         # Complete work
+```
+
+### Rules
+
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `bd prime` for detailed command reference and session close protocol
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+
+## Landing the Plane (Session Completion)
+
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+**MANDATORY WORKFLOW:**
+
+1. **File issues for remaining work** - Create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **PUSH TO REMOTE** - This is MANDATORY:
+   ```bash
+   git pull --rebase
+   bd dolt push
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** - Clear stashes, prune remote branches
+6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
+
+**CRITICAL RULES:**
+- Work is NOT complete until `git push` succeeds
+- NEVER stop before pushing - that leaves work stranded locally
+- NEVER say "ready to push when you are" - YOU must push
+- If push fails, resolve and retry until it succeeds
+<!-- END BEADS INTEGRATION -->
+
+## Project overrides to the beads boilerplate above
+
+The beads-installed block above is generic. This project's actual conventions override several of its rules — keep both in mind, and prefer these when they conflict:
+
+- **`bd remember` vs `MEMORY.md`**: this project keeps native Claude Code memory files at `~/.claude/projects/-Users-derek-Projects-hytale-chest-mod/memory/` (MEMORY.md + per-entry files). They predate beads and already hold validated feedback. Use them for cross-session *preferences / feedback / project facts*. Use `bd` for *issue tracking specifically* (epics, bugs, feature work). They're not interchangeable.
+- **`bd` vs `TaskCreate`**: `bd` is persistent across sessions (issues, epics, roadmap). `TaskCreate` is the Claude Code ephemeral in-session task list — a 6-step plan that evaporates when the session ends. Use `TaskCreate` for intra-session tracking of the current unit of work; use `bd` for anything that should survive the session.
+- **"Push on every session"**: explicitly overridden. We use **branch protection + PR review** on `main`. Don't push to `main`; open a PR. Don't merge PRs without user approval. When ending a session with unpushed feature-branch commits, push the feature branch and leave the PR to the user for approval.
+- **Destructive / shared-state actions require user confirmation**: force-pushes, `bd dolt push` to a remote the user hasn't set up, branch deletions, CurseForge uploads, server restarts on the Docker production server. Always ask before, never unilateral.
+- **Issue shape**: phases use type=`epic` (e.g. `sc-l47` Phase 2). Phase work uses type=`task` with `--parent <epic-id>`. Review advisories use type=`task` with label `phase-1-followup` or `v0.1.2-followup`. Priorities: P0 critical/research, P1 main feature work, P2 default, P3 polish/low.
+
+### Starter command set
+
+```bash
+bd ready                         # What can I pick up right now?
+bd show sc-l47                   # Inspect an epic or issue
+bd children sc-l47               # Drill into an epic's children
+bd list --status open -l phase-2 # Filter by label
+bd update <id> --claim           # Claim before working
+bd close <id> --reason "..."     # Close with context
+bd create "Title" -t task -p 2 --parent <epic-id>  # New child task under an epic
+```
