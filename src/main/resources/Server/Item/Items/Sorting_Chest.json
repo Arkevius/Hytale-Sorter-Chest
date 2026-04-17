@@ -43,6 +43,7 @@
     },
     "BlockEntity": {
       "Components": {
+        "Arkevius_SortingChestBlock": {},
         "ItemContainerBlock": { "Capacity": 27 }
       }
     },

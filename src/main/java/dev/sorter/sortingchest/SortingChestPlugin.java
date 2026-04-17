@@ -40,6 +40,8 @@ public final class SortingChestPlugin extends JavaPlugin {
     private static final double SORT_RADIUS = 100.0;
     private static final double SORT_RADIUS_SQ = SORT_RADIUS * SORT_RADIUS;
 
+    private ComponentType<ChunkStore, SortingChestBlock> sortingChestType;
+
     private record Entry(
         Ref<ChunkStore> ref,
         Vector3d position,
@@ -48,6 +50,13 @@ public final class SortingChestPlugin extends JavaPlugin {
 
     public SortingChestPlugin(JavaPluginInit init) {
         super(init);
+    }
+
+    @Override
+    protected void setup() {
+        super.setup();
+        this.sortingChestType = getChunkStoreRegistry().registerComponent(
+            SortingChestBlock.class, "Arkevius_SortingChestBlock", SortingChestBlock.CODEC);
     }
 
     @Override
