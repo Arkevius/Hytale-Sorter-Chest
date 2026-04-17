@@ -67,7 +67,7 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
 
     private record Entry(
         Ref<ChunkStore> ref,
-        Vector3d position,
+        Pos position,
         SimpleItemContainer container,
         boolean isSortingChest) {}
 
@@ -93,16 +93,20 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         World world = worldByStore.computeIfAbsent(store, this::resolveWorldFor);
 
         // SpatialResource is populated by Hytale's ItemContainerBlockSpatialSystem
-        // and maps every container-block entity to its world-space Vector3d.
+        // and maps every container-block entity to its world-space position. The
+        // underlying Vector3d type differs across Hytale builds; we adapt to a
+        // neutral Pos at the boundary here (next commit will swap this inline
+        // adapter for the reflective shim in SpatialPositions).
         SpatialResource<Ref<ChunkStore>, ChunkStore> spatial = store.getResource(spatialType);
-        Map<Integer, Vector3d> positionsByRefIndex = new HashMap<>();
+        Map<Integer, Pos> positionsByRefIndex = new HashMap<>();
         if (spatial != null) {
             SpatialData<Ref<ChunkStore>> data = spatial.getSpatialData();
             int n = data.size();
             for (int i = 0; i < n; i++) {
                 Ref<ChunkStore> r = data.getData(i);
                 if (r == null) continue;
-                positionsByRefIndex.put(r.getIndex(), data.getVector(i));
+                Vector3d v = data.getVector(i);
+                positionsByRefIndex.put(r.getIndex(), new Pos(v.getX(), v.getY(), v.getZ()));
             }
         }
 
@@ -117,7 +121,7 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
                 SimpleItemContainer c = icb.getItemContainer();
                 if (c == null) continue;
                 Ref<ChunkStore> ref = chunk.getReferenceTo(i);
-                Vector3d pos = (ref != null) ? positionsByRefIndex.get(ref.getIndex()) : null;
+                Pos pos = (ref != null) ? positionsByRefIndex.get(ref.getIndex()) : null;
                 boolean sortingChest = chunk.getComponent(i, sortingChestType) != null;
                 if (!sortingChest && world != null && pos != null && ref != null
                     && isSortingChestBlockAt(world, pos)) {
@@ -142,7 +146,7 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
     }
 
     private void sortOneChest(Entry src, List<Entry> all, int storeHash) {
-        Vector3d srcPos = src.position();
+        Pos srcPos = src.position();
         short srcCap = src.container().getCapacity();
 
         List<Entry> candidates = all.stream()
@@ -155,7 +159,7 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         int itemsMovedTotal = 0;
         // { destination position -> items deposited there this pass }. LinkedHashMap so
         // log order matches routing order (first-fit), not hash iteration order.
-        Map<Vector3d, Integer> movesByDestination = new LinkedHashMap<>();
+        Map<Pos, Integer> movesByDestination = new LinkedHashMap<>();
         // Reused across all moveItemStackFromSlot calls for this source. The API takes
         // an ItemContainer[] but we always pass exactly one target at a time so we can
         // attribute per-destination deltas.
@@ -201,7 +205,7 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
 
         StringBuilder destinations = new StringBuilder();
         boolean first = true;
-        for (Map.Entry<Vector3d, Integer> move : movesByDestination.entrySet()) {
+        for (Map.Entry<Pos, Integer> move : movesByDestination.entrySet()) {
             if (!first) destinations.append(", ");
             destinations.append(formatPos(move.getKey())).append('=').append(move.getValue());
             first = false;
@@ -211,15 +215,15 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
             storeHash, formatPos(srcPos), itemsMovedTotal, destinations.toString());
     }
 
-    private static String formatPos(Vector3d pos) {
+    private static String formatPos(Pos pos) {
         if (pos == null) return "?";
         return String.format("(%d,%d,%d)",
-            (int) Math.floor(pos.getX()),
-            (int) Math.floor(pos.getY()),
-            (int) Math.floor(pos.getZ()));
+            (int) Math.floor(pos.x()),
+            (int) Math.floor(pos.y()),
+            (int) Math.floor(pos.z()));
     }
 
-    private static boolean withinRadius(Vector3d a, Vector3d b) {
+    private static boolean withinRadius(Pos a, Pos b) {
         return a.distanceSquaredTo(b) <= SORT_RADIUS_SQ;
     }
 
@@ -243,13 +247,13 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         return null;
     }
 
-    private static boolean isSortingChestBlockAt(World world, Vector3d pos) {
-        long key = ChunkUtil.indexChunkFromBlock(pos.getX(), pos.getZ());
+    private static boolean isSortingChestBlockAt(World world, Pos pos) {
+        long key = ChunkUtil.indexChunkFromBlock(pos.x(), pos.z());
         WorldChunk chunk = world.getChunkIfLoaded(key);
         if (chunk == null) return false;
-        int lx = ChunkUtil.localCoordinate((long) Math.floor(pos.getX()));
-        int ly = (int) Math.floor(pos.getY());
-        int lz = ChunkUtil.localCoordinate((long) Math.floor(pos.getZ()));
+        int lx = ChunkUtil.localCoordinate((long) Math.floor(pos.x()));
+        int ly = (int) Math.floor(pos.y());
+        int lz = ChunkUtil.localCoordinate((long) Math.floor(pos.z()));
         BlockType type = chunk.getBlockType(lx, ly, lz);
         if (type == null) return false;
         String id = type.getId();
