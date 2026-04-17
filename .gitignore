@@ -6,3 +6,4 @@ out/
 .vscode/
 *.log
 .DS_Store
+ROADMAP.md

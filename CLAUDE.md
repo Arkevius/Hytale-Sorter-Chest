@@ -26,9 +26,11 @@ javap -cp "$JAR" -public <fully.qualified.ClassName>
 
 - **Packaging**: a plugin that also ships assets belongs in ONE jar. Put `manifest.json` at the jar root with `Main` (FQCN of the plugin class) AND `IncludesAssetPack: true`, and put `Common/` / `Server/` at the jar root. Hytale's `PluginManager` loads the code and `AssetModule` registers the same jar as a pack. Do NOT also ship the assets as a sibling `<UserData>/mods/<name>/` directory — the same manifest will register twice and Hytale logs a duplicate-pack warning. One file, one registration.
 - **Manifest schema**: the canonical `PluginManifest` fields are `Group`, `Name`, `Version`, `Description`, `Authors` (array of `{Name, Email, Url}`), `Website`, `Main`, `ServerVersion`, `Dependencies`, `OptionalDependencies`, `LoadBefore`, `DisabledByDefault`, `IncludesAssetPack`, `SubPlugins`. Other fields (e.g. `Id`, `Author` singular, `ApiVersion`) are silently ignored by the runtime but fail strict validation on CurseForge and similar gates.
-- **Plugin entry**: extend `com.hypixel.hytale.server.core.plugin.JavaPlugin`, take `JavaPluginInit` in the constructor, override **`protected void start()`**. `setup()` runs too early — other core plugins aren't up yet.
-- **ECS events do NOT dispatch through the plugin `EventRegistry`.** Events in `com.hypixel.hytale.server.core.event.events.ecs.*` (e.g. `PlaceBlockEvent`) fire on per-store buses. `events.player.*` events (e.g. `PlayerChatEvent`) work fine via `getEventRegistry().registerGlobal(Class, Consumer)`. For block-placement-style triggers, prefer polling via `HytaleServer.SCHEDULED_EXECUTOR` + ECS iteration.
-- **World thread**: `World implements Executor`. Dispatch all ECS reads/writes via `world.execute(Runnable)`.
+- **Plugin entry**: extend `com.hypixel.hytale.server.core.plugin.JavaPlugin`, take `JavaPluginInit` in the constructor, override `protected void setup()` for ECS schema registration (components + systems) and `protected void start()` for runtime logic (event listeners, anything that depends on other plugins being enabled). `setup()` fires before the wider plugin graph is up — that's why event registration belongs in `start()` — but ECS component/system registration MUST happen in `setup()` so chunk deserialization can find codecs before worlds load.
+- **ECS dispatch is idiomatically via a system, not polling.** Register a `DelayedSystem<ChunkStore>` (or the non-delayed `TickingSystem` / `EntityTickingSystem` / `ArchetypeTickingSystem`) in `setup()` via `getChunkStoreRegistry().registerSystem(...)`. The engine drives ticks per-store with delta-time; no `SCHEDULED_EXECUTOR`, no manual thread hop. `DelayedSystem(float intervalSec)` gates at your desired cadence (we use 2.0s). `SortingChestSystem` is our canonical example.
+- **Custom components on existing entities**: declare the component in the block's JSON under `BlockEntity.Components`; the engine attaches it on placement and chunk load. For runtime attachment to entities we don't own (e.g. vanilla chests), use `CommandBuffer` from inside a system's tick. `addComponent` has two forms: the 2-arg `addComponent(ref, type)` calls the codec's default supplier to instantiate a fresh component (right for marker-style components with a private no-arg constructor — see `SortingChestSystem` migrating legacy chests), while the 3-arg `addComponent(ref, type, value)` attaches a component instance you've already built (right for components carrying state). `putComponent` is add-or-replace; `ensureComponent` is no-op if already attached; `removeComponent` / `tryRemoveComponent` delete.
+- **ECS events do NOT dispatch through the plugin `EventRegistry`.** Events in `com.hypixel.hytale.server.core.event.events.ecs.*` (e.g. `PlaceBlockEvent`, `BreakBlockEvent`) fire on per-store buses — not yet solved for plugin code. `events.player.*` events (e.g. `PlayerChatEvent`, `PlayerInteractEvent`) work fine via `getEventRegistry().registerGlobal(Class, Consumer)`.
+- **Thread guarantees inside a system tick**: the engine calls `tick(...)` / `delayedTick(...)` with the store already locked for us — direct ECS reads/writes and direct container mutations are safe without `world.execute(...)` wrapping. Only wrap when dispatching INTO the world thread from code that runs outside the ECS tick (e.g. a player-event listener).
 - **Chunk store unwrap**: `world.getChunkStore()` returns a wrapper; `.getStore()` drills to the actual `Store<ChunkStore>` where `forEachChunk` lives. Same pattern for `EntityStore`.
 - **State-variant block ids**: any block declared with `State.Definitions` in its JSON gets exploded into one `BlockType` per state, with generated ids of the form `*<BaseId>_State_Definitions_<StateName>`. `BlockType.getId()` at runtime returns a variant id, never the bare id. Match on the prefix.
 - **Worlds**: `Universe.get().getWorlds()` contains both `"default"` (empty placeholder) and the actual gameplay world (e.g. `"flat_world"`). Iterate all of them; skip any with `getEntityCountFor(...)` == 0.
@@ -52,17 +54,26 @@ javap -cp "$JAR" -public <fully.qualified.ClassName>
    grep -niE '\[sort\]|Exception' "$HYTALE_LOG" | tail -20
    ```
    (The `chestlog` alias in the developer's shell wraps this.)
-4. Reproduce the behavior; confirm `[sort] ... itemsMoved=N` lines only appear when items actually transfer (the counter diffs before/after quantity, so zero-actual-transfer ticks don't log).
+4. Reproduce the behavior; confirm log lines of shape `[sort] store=<hash> src=(x,y,z) itemsMoved=N dest=[(x,y,z)=qty, ...]` only appear when items actually transfer (the counter diffs before/after quantity, so zero-actual-transfer ticks don't log).
 
 ## Code layout
 
-Single-file plugin at `src/main/java/dev/sorter/sortingchest/SortingChestPlugin.java`. Assets and manifest at `src/main/resources/` (jar root at runtime):
+Plugin code in `src/main/java/dev/sorter/sortingchest/` — one file per ECS concept, mirroring the idiom in upstream mods like Simply-Trash:
+
+```
+src/main/java/dev/sorter/sortingchest/
+  SortingChestPlugin.java         JavaPlugin lifecycle: setup() registers component + system, start() logs
+  SortingChestBlock.java          marker Component<ChunkStore> for Sorting Chest entities
+  SortingChestSystem.java         DelayedSystem<ChunkStore> that does the sort pass every 2s
+```
+
+Assets and manifest at `src/main/resources/` (jar root at runtime):
 
 ```
 src/main/resources/
   manifest.json                              unified plugin + asset-pack manifest
   Server/
-    Item/Items/Sorting_Chest.json            item + block + inline recipe
+    Item/Items/Sorting_Chest.json            item + block + inline recipe, declares Arkevius_SortingChestBlock
     Languages/en-US/server.lang              key=value, not JSON
 ```
 

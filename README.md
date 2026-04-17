@@ -80,11 +80,10 @@ The model and textures currently reuse Hytale's Lumberjack Small Chest assets so
 
 ## Roadmap
 
-- Custom 3D model and texture
-- Tiers (higher-radius variants, upgrade recipes)
-- Item filters (whitelist / blacklist per chest)
-- Void overflow (optional: delete items when no destination exists)
-- Priority ordering (flag chests as preferred destinations)
+- **Filter tool** — a craftable magical staff that binds an item type to any chest, giving each stack a designated home.
+- **Custom arcane visuals** — distinctive chest texture, tool model, and UI polish so the mod looks the way it feels.
+- **Progression & variety** — tiers, alternate recipes, and new craftable variants.
+- **Quality-of-life follow-ups** — priority ordering, void overflow, per-chest radius, and more.
 
 ## Compatibility
 
