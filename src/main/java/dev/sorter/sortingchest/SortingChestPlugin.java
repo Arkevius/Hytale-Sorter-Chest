@@ -6,10 +6,8 @@ import com.hypixel.hytale.component.ResourceType;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.component.spatial.SpatialData;
 import com.hypixel.hytale.component.spatial.SpatialResource;
-import com.hypixel.hytale.math.util.ChunkUtil;
 import com.hypixel.hytale.math.vector.Vector3d;
 import com.hypixel.hytale.server.core.HytaleServer;
-import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
 import com.hypixel.hytale.server.core.inventory.ItemStack;
 import com.hypixel.hytale.server.core.inventory.container.ItemContainer;
 import com.hypixel.hytale.server.core.inventory.container.SimpleItemContainer;
@@ -19,7 +17,6 @@ import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.universe.world.World;
-import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
 import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 
 import java.util.ArrayList;
@@ -32,11 +29,6 @@ import java.util.logging.Level;
 
 public final class SortingChestPlugin extends JavaPlugin {
 
-    private static final String SORTING_CHEST_ID = "Sorting_Chest";
-    // Blocks declared with State.Definitions in the asset JSON are exploded
-    // into per-state BlockType entries keyed as "*<Id>_State_Definitions_<State>"
-    // (e.g. OpenWindow, CloseWindow). Match any state variant of our block.
-    private static final String SORTING_CHEST_STATE_PREFIX = "*Sorting_Chest_State_Definitions_";
     private static final double SORT_RADIUS = 100.0;
     private static final double SORT_RADIUS_SQ = SORT_RADIUS * SORT_RADIUS;
 
@@ -46,7 +38,7 @@ public final class SortingChestPlugin extends JavaPlugin {
         Ref<ChunkStore> ref,
         Vector3d position,
         SimpleItemContainer container,
-        String blockId) {}
+        boolean isSortingChest) {}
 
     public SortingChestPlugin(JavaPluginInit init) {
         super(init);
@@ -112,13 +104,10 @@ public final class SortingChestPlugin extends JavaPlugin {
                 if (c == null) continue;
                 Ref<ChunkStore> ref = chunk.getReferenceTo(i);
                 Vector3d pos = (ref != null) ? positionsByRefIndex.get(ref.getIndex()) : null;
-                String blockId = (pos != null) ? resolveBlockId(world, pos) : null;
-                Entry entry = new Entry(ref, pos, c, blockId);
+                boolean sortingChest = chunk.getComponent(i, sortingChestType) != null;
+                Entry entry = new Entry(ref, pos, c, sortingChest);
                 all.add(entry);
-                if (pos != null
-                    && isSortingChest(blockId)
-                    && !c.isEmpty()
-                    && isClosed(icb)) {
+                if (pos != null && sortingChest && !c.isEmpty() && isClosed(icb)) {
                     sources.add(entry);
                 }
             }
@@ -138,7 +127,7 @@ public final class SortingChestPlugin extends JavaPlugin {
 
         List<Entry> candidates = all.stream()
             .filter(t -> t != src)
-            .filter(t -> !isSortingChest(t.blockId()))
+            .filter(t -> !t.isSortingChest())
             .filter(t -> t.position() != null && withinRadius(srcPos, t.position()))
             .toList();
         if (candidates.isEmpty()) return;
@@ -175,23 +164,6 @@ public final class SortingChestPlugin extends JavaPlugin {
 
     private static boolean withinRadius(Vector3d a, Vector3d b) {
         return a.distanceSquaredTo(b) <= SORT_RADIUS_SQ;
-    }
-
-    private static boolean isSortingChest(String blockId) {
-        return blockId != null
-            && (SORTING_CHEST_ID.equals(blockId)
-                || blockId.startsWith(SORTING_CHEST_STATE_PREFIX));
-    }
-
-    private static String resolveBlockId(World world, Vector3d pos) {
-        long key = ChunkUtil.indexChunkFromBlock(pos.getX(), pos.getZ());
-        WorldChunk chunk = world.getChunkIfLoaded(key);
-        if (chunk == null) return null;
-        int lx = ChunkUtil.localCoordinate((long) Math.floor(pos.getX()));
-        int ly = (int) Math.floor(pos.getY());
-        int lz = ChunkUtil.localCoordinate((long) Math.floor(pos.getZ()));
-        BlockType type = chunk.getBlockType(lx, ly, lz);
-        return (type == null) ? null : type.getId();
     }
 
     private static boolean isClosed(ItemContainerBlock icb) {
