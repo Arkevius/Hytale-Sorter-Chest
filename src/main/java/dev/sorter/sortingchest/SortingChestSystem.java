@@ -53,6 +53,7 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
     private static final String SORTING_CHEST_ID = "Sorting_Chest";
     private static final String SORTING_CHEST_STATE_PREFIX = "*Sorting_Chest_State_Definitions_";
 
+    private final SortingChestPlugin plugin;
     private final HytaleLogger logger;
     private final ComponentType<ChunkStore, SortingChestBlock> sortingChestType;
     private final ComponentType<ChunkStore, ItemContainerBlock> itemContainerType;
@@ -71,10 +72,12 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         boolean isSortingChest) {}
 
     public SortingChestSystem(
+        SortingChestPlugin plugin,
         HytaleLogger logger,
         ComponentType<ChunkStore, SortingChestBlock> sortingChestType
     ) {
         super(SORT_INTERVAL_SEC);
+        this.plugin = plugin;
         this.logger = logger;
         this.sortingChestType = sortingChestType;
         BlockModule blockModule = BlockModule.get();
@@ -84,6 +87,16 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
 
     @Override
     public void delayedTick(float dt, int pass, Store<ChunkStore> store) {
+        if (plugin.isDisabled()) return;
+        try {
+            delayedTickImpl(dt, pass, store);
+        } catch (Throwable t) {
+            plugin.markDisabled(
+                "error during sort tick: " + t.getClass().getSimpleName() + " " + t.getMessage(), t);
+        }
+    }
+
+    private void delayedTickImpl(float dt, int pass, Store<ChunkStore> store) {
         if (store.getEntityCountFor(itemContainerType) == 0) return;
         int storeHash = System.identityHashCode(store);
 
