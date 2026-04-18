@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.WeakHashMap;
 import java.util.logging.Level;
 
@@ -63,7 +64,14 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
     // stores don't linger; synchronized wrapper because the engine is free to fire
     // delayedTick for different stores on different threads, and computeIfAbsent
     // mutates the map.
-    private final Map<Store<ChunkStore>, World> worldByStore =
+    //
+    // Value is Optional<World> rather than World so that a NEGATIVE resolution
+    // (Universe.get() not yet up, or store can't be matched to a world) is ALSO
+    // cached. Without the Optional, computeIfAbsent drops null results per the
+    // Map contract and we'd iterate Universe.getWorlds() on every 2 s tick until
+    // resolution eventually succeeds. Cache the miss; re-probe only on explicit
+    // invalidation (which we currently never do) (sc-134).
+    private final Map<Store<ChunkStore>, Optional<World>> worldByStore =
         Collections.synchronizedMap(new WeakHashMap<>());
 
     private record Entry(
@@ -103,7 +111,9 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
 
         // We only need the World for block-type lookups during legacy-marker migration.
         // Null is fine — just means we can't migrate on THIS store this tick.
-        World world = worldByStore.computeIfAbsent(store, this::resolveWorldFor);
+        World world = worldByStore
+            .computeIfAbsent(store, s -> Optional.ofNullable(resolveWorldFor(s)))
+            .orElse(null);
 
         // SpatialResource is populated by Hytale's ItemContainerBlockSpatialSystem
         // and maps every container-block entity to its world-space position. The

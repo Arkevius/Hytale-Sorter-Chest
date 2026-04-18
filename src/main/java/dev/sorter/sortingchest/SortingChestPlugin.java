@@ -11,18 +11,24 @@ import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 
 public final class SortingChestPlugin extends JavaPlugin {
 
-    // Shown in server chat when the mod is disabled, both as a one-shot broadcast
-    // at the moment of failure and to every player who joins thereafter.
-    private static final String DISABLED_WARNING =
-        "[Sorting Chest] Mod is currently disabled — the server build is not compatible "
-            + "with this version of Sorting Chest. Items placed in Sorting Chests will not "
-            + "be redistributed. Check for a mod update.";
+    // Prefix shared by the SEVERE log line, the one-shot chat broadcast, and the
+    // per-joiner chat message. We append the specific disable reason at runtime
+    // so players see WHY instead of just "disabled" (sc-mbv).
+    private static final String DISABLED_WARNING_PREFIX =
+        "[Sorting Chest] Mod is currently disabled";
+    private static final String DISABLED_WARNING_SUFFIX =
+        ". Items placed in Sorting Chests will not be redistributed. Check for a mod update.";
 
-    private volatile boolean disabled = false;
+    // AtomicBoolean rather than volatile: markDisabled is check-then-set, which isn't
+    // atomic under a volatile boolean. Engine may dispatch delayedTick for different
+    // stores on different threads; without CAS, two concurrent throws could double-fire
+    // the broadcast. compareAndSet is the canonical one-shot guard (sc-5rd).
+    private final AtomicBoolean disabled = new AtomicBoolean(false);
     private volatile String disableReason = null;
 
     public SortingChestPlugin(JavaPluginInit init) {
@@ -53,27 +59,27 @@ public final class SortingChestPlugin extends JavaPlugin {
         // Late-joiners see the warning on entry even if the disable happened
         // before they connected.
         getEventRegistry().registerGlobal(AddPlayerToWorldEvent.class, event -> {
-            if (!disabled) return;
+            if (!disabled.get()) return;
             Holder<EntityStore> holder = event.getHolder();
             if (holder == null) return;
             PlayerRef playerRef = holder.getComponent(PlayerRef.getComponentType());
             if (playerRef == null || !playerRef.isValid()) return;
-            playerRef.sendMessage(Message.raw(DISABLED_WARNING));
+            playerRef.sendMessage(Message.raw(buildDisabledWarning()));
         });
     }
 
     public boolean isDisabled() {
-        return disabled;
+        return disabled.get();
     }
 
     /**
      * Flip the mod into dormant mode and warn every connected player exactly
-     * once. Subsequent calls are no-ops so a repeatedly-crashing tick doesn't
+     * once. Repeat calls are no-ops (compareAndSet guarantees single-fire even
+     * under concurrent store ticks), so a repeatedly-crashing tick doesn't
      * spam chat.
      */
     public void markDisabled(String reason, Throwable cause) {
-        if (disabled) return;
-        disabled = true;
+        if (!disabled.compareAndSet(false, true)) return;
         disableReason = reason;
 
         if (cause != null) {
@@ -85,11 +91,24 @@ public final class SortingChestPlugin extends JavaPlugin {
         try {
             Universe universe = Universe.get();
             if (universe != null) {
-                universe.sendMessage(Message.raw(DISABLED_WARNING));
+                universe.sendMessage(Message.raw(buildDisabledWarning()));
             }
         } catch (Throwable t) {
             // Best-effort; don't let a broadcast failure undo the disable state.
             getLogger().at(Level.WARNING).log("Failed to broadcast disable warning: %s", t);
         }
+    }
+
+    /**
+     * Assemble the player-facing chat message including the current disable
+     * reason (sc-mbv). Called both from the one-shot broadcast and from the
+     * per-joiner listener.
+     */
+    private String buildDisabledWarning() {
+        String reason = disableReason;
+        if (reason == null || reason.isEmpty()) {
+            return DISABLED_WARNING_PREFIX + DISABLED_WARNING_SUFFIX;
+        }
+        return DISABLED_WARNING_PREFIX + ": " + reason + DISABLED_WARNING_SUFFIX;
     }
 }
