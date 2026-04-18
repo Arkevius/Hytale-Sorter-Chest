@@ -284,15 +284,15 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
      * back to a live {@link #resolveWorldFor(Store)} probe on miss. Positive
      * resolutions are cached; negative ones are NOT, so we re-probe next tick until
      * Universe startup completes.
+     *
+     * Implemented via {@code computeIfAbsent} rather than a manual
+     * {@code get}/{@code put} pair: on a synchronized-map wrapper, {@code computeIfAbsent}
+     * holds the map lock across the compute and per the {@code Map} contract
+     * skips the insert when the mapping function returns {@code null}. That's
+     * exactly the positive-only atomic behavior we want, with no TOCTOU gap.
      */
     private World lookupWorld(Store<ChunkStore> store) {
-        World cached = worldByStore.get(store);
-        if (cached != null) return cached;
-        World resolved = resolveWorldFor(store);
-        if (resolved != null) {
-            worldByStore.put(store, resolved);
-        }
-        return resolved;
+        return worldByStore.computeIfAbsent(store, this::resolveWorldFor);
     }
 
     /**
