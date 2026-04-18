@@ -79,8 +79,13 @@ public final class SortingChestPlugin extends JavaPlugin {
      * spam chat.
      */
     public void markDisabled(String reason, Throwable cause) {
-        if (!disabled.compareAndSet(false, true)) return;
+        // Publish the reason BEFORE flipping the flag so a reader that observes
+        // disabled==true via the subsequent CAS also sees the reason (CAS has
+        // happens-before semantics). Previously the order was reversed and a
+        // player joining in the narrow window between flag-flip and reason-write
+        // got a reason-free warning.
         disableReason = reason;
+        if (!disabled.compareAndSet(false, true)) return;
 
         if (cause != null) {
             getLogger().at(Level.SEVERE).log("Sorting Chest DISABLED: %s", reason, cause);

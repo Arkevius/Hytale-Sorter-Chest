@@ -26,7 +26,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.WeakHashMap;
 import java.util.logging.Level;
 
@@ -60,18 +59,19 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
     private final ComponentType<ChunkStore, SortingChestBlock> sortingChestType;
     private final ComponentType<ChunkStore, ItemContainerBlock> itemContainerType;
     private final ResourceType<ChunkStore, SpatialResource<Ref<ChunkStore>, ChunkStore>> spatialType;
-    // Populated lazily the first time a given store ticks. WeakHashMap so destroyed
-    // stores don't linger; synchronized wrapper because the engine is free to fire
-    // delayedTick for different stores on different threads, and computeIfAbsent
-    // mutates the map.
+    // Positive-only cache: we populate this the first tick `resolveWorldFor`
+    // succeeds for a store and never again. A negative resolution (Universe.get()
+    // not up yet) is NOT cached, so we re-probe on the next tick until we
+    // succeed. That's the deliberate choice: caching a null (or Optional.empty)
+    // would be a permanent miss if the first tick for this store happened to
+    // race Universe startup, and migration for that store would never run.
+    // Universe.getWorlds() is O(number-of-worlds) which is tiny; the re-probe
+    // cost during the narrow startup window is negligible (sc-134).
     //
-    // Value is Optional<World> rather than World so that a NEGATIVE resolution
-    // (Universe.get() not yet up, or store can't be matched to a world) is ALSO
-    // cached. Without the Optional, computeIfAbsent drops null results per the
-    // Map contract and we'd iterate Universe.getWorlds() on every 2 s tick until
-    // resolution eventually succeeds. Cache the miss; re-probe only on explicit
-    // invalidation (which we currently never do) (sc-134).
-    private final Map<Store<ChunkStore>, Optional<World>> worldByStore =
+    // WeakHashMap so destroyed stores don't linger; synchronized wrapper because
+    // the engine is free to fire delayedTick for different stores on different
+    // threads.
+    private final Map<Store<ChunkStore>, World> worldByStore =
         Collections.synchronizedMap(new WeakHashMap<>());
 
     private record Entry(
@@ -110,10 +110,22 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         int storeHash = System.identityHashCode(store);
 
         // We only need the World for block-type lookups during legacy-marker migration.
-        // Null is fine — just means we can't migrate on THIS store this tick.
-        World world = worldByStore
-            .computeIfAbsent(store, s -> Optional.ofNullable(resolveWorldFor(s)))
-            .orElse(null);
+        // Null is fine — just means we can't migrate on THIS store this tick. Cache on
+        // success only; re-probe on miss (see comment on worldByStore).
+        final World world = lookupWorld(store);
+
+        // Decide up front whether this tick can run the legacy-marker migration.
+        // Off-thread delayedTick dispatch would make getChunkIfLoaded deadlock
+        // against the store lock held by forEachChunk (see CLAUDE.md), so gate
+        // migration on isInThread()+isStarted(). Log once per tick at FINE level
+        // if we're skipping so off-thread dispatch is diagnosable without
+        // spamming per-entity.
+        final boolean canMigrate = world != null && world.isStarted() && world.isInThread();
+        if (world != null && !canMigrate) {
+            logger.at(Level.FINE).log(
+                "[sort] migration skipped this tick: world=%s started=%b inThread=%b store=%08x",
+                world.getName(), world.isStarted(), world.isInThread(), storeHash);
+        }
 
         // SpatialResource is populated by Hytale's ItemContainerBlockSpatialSystem
         // and maps every container-block entity to its world-space position. The
@@ -149,16 +161,9 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
                 Ref<ChunkStore> ref = chunk.getReferenceTo(i);
                 Pos pos = (ref != null) ? positionsByRefIndex.get(ref.getIndex()) : null;
                 boolean sortingChest = chunk.getComponent(i, sortingChestType) != null;
-                // World.getChunkIfLoaded has an isInThread() short-circuit: off the
-                // world thread it dispatches via CompletableFuture.supplyAsync(..., world).join(),
-                // which can deadlock against the store lock that forEachChunk holds. On
-                // observed Hytale builds delayedTick runs on the world thread (isInThread
-                // == true), but guard explicitly so a future engine change that dispatches
-                // us off-thread degrades to "migration skipped this tick" rather than a
-                // hung world tick (sc-d06). Also defend against stale attached Worlds whose
-                // tick thread is already gone (isStarted == false).
-                if (!sortingChest && world != null && pos != null && ref != null
-                    && world.isStarted() && world.isInThread()
+                // canMigrate was computed once per-tick above; see its comment for
+                // the deadlock-guard reasoning (sc-d06).
+                if (!sortingChest && canMigrate && pos != null && ref != null
                     && isSortingChestBlockAt(world, pos)) {
                     cmdBuf.addComponent(ref, sortingChestType);
                     sortingChest = true;
@@ -264,6 +269,22 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
 
     private static boolean isClosed(ItemContainerBlock icb) {
         return icb.getWindows().isEmpty();
+    }
+
+    /**
+     * Return the World that owns {@code store}, using the cache on hit and falling
+     * back to a live {@link #resolveWorldFor(Store)} probe on miss. Positive
+     * resolutions are cached; negative ones are NOT, so we re-probe next tick until
+     * Universe startup completes.
+     */
+    private World lookupWorld(Store<ChunkStore> store) {
+        World cached = worldByStore.get(store);
+        if (cached != null) return cached;
+        World resolved = resolveWorldFor(store);
+        if (resolved != null) {
+            worldByStore.put(store, resolved);
+        }
+        return resolved;
     }
 
     /**

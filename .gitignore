@@ -7,6 +7,9 @@ out/
 *.log
 .DS_Store
 
+# Claude Code runtime state (scheduler locks, per-session files)
+.claude/
+
 # Dolt database files (added by bd init)
 .dolt/
 *.db
