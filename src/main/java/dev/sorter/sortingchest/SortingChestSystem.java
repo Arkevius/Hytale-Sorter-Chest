@@ -120,11 +120,19 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         // migration on isInThread()+isStarted(). Log once per tick at FINE level
         // if we're skipping so off-thread dispatch is diagnosable without
         // spamming per-entity.
-        final boolean canMigrate = world != null && world.isStarted() && world.isInThread();
+        //
+        // Snapshot isStarted / isInThread into locals BEFORE computing canMigrate
+        // so the diagnostic log below reports the exact values that drove the
+        // decision. Re-reading world.isInThread() inside the log call could show
+        // a different (more recent) value if the world's thread state transitions
+        // between the snapshot and the log call — confusing in traces.
+        final boolean worldStarted = world != null && world.isStarted();
+        final boolean worldInThread = worldStarted && world.isInThread();
+        final boolean canMigrate = worldInThread;
         if (world != null && !canMigrate) {
             logger.at(Level.FINE).log(
                 "[sort] migration skipped this tick: world=%s started=%b inThread=%b store=%08x",
-                world.getName(), world.isStarted(), world.isInThread(), storeHash);
+                world.getName(), worldStarted, worldInThread, storeHash);
         }
 
         // SpatialResource is populated by Hytale's ItemContainerBlockSpatialSystem

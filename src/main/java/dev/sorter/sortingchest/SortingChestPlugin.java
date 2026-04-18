@@ -11,7 +11,7 @@ import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
 public final class SortingChestPlugin extends JavaPlugin {
@@ -23,13 +23,21 @@ public final class SortingChestPlugin extends JavaPlugin {
         "[Sorting Chest] Mod is currently disabled";
     private static final String DISABLED_WARNING_SUFFIX =
         ". Items placed in Sorting Chests will not be redistributed. Check for a mod update.";
+    // Sentinel for the "disabled but caller gave null/empty reason" case. We need
+    // the AtomicReference to be non-null to signal the disabled state; this value
+    // substitutes in place of a caller-supplied reason.
+    private static final String DEFAULT_REASON = "(no reason supplied)";
 
-    // AtomicBoolean rather than volatile: markDisabled is check-then-set, which isn't
-    // atomic under a volatile boolean. Engine may dispatch delayedTick for different
-    // stores on different threads; without CAS, two concurrent throws could double-fire
-    // the broadcast. compareAndSet is the canonical one-shot guard (sc-5rd).
-    private final AtomicBoolean disabled = new AtomicBoolean(false);
-    private volatile String disableReason = null;
+    // Disable state is a single AtomicReference<String>:
+    //   - null  → enabled (never disabled)
+    //   - non-null → disabled, value is the reason that caused it
+    // compareAndSet(null, reason) atomically publishes BOTH the flag and the
+    // reason in one step. Previous shape (AtomicBoolean flag + separate String
+    // reason field) had a two-writer race: two concurrent markDisabled calls
+    // could both write to the reason field before either reached the CAS, so
+    // whichever thread won the CAS might broadcast the OTHER thread's reason.
+    // Collapsing them eliminates that race entirely. (sc-5rd residual fix.)
+    private final AtomicReference<String> disableReason = new AtomicReference<>(null);
 
     public SortingChestPlugin(JavaPluginInit init) {
         super(init);
@@ -59,7 +67,7 @@ public final class SortingChestPlugin extends JavaPlugin {
         // Late-joiners see the warning on entry even if the disable happened
         // before they connected.
         getEventRegistry().registerGlobal(AddPlayerToWorldEvent.class, event -> {
-            if (!disabled.get()) return;
+            if (!isDisabled()) return;
             Holder<EntityStore> holder = event.getHolder();
             if (holder == null) return;
             PlayerRef playerRef = holder.getComponent(PlayerRef.getComponentType());
@@ -69,7 +77,7 @@ public final class SortingChestPlugin extends JavaPlugin {
     }
 
     public boolean isDisabled() {
-        return disabled.get();
+        return disableReason.get() != null;
     }
 
     /**
@@ -79,18 +87,15 @@ public final class SortingChestPlugin extends JavaPlugin {
      * spam chat.
      */
     public void markDisabled(String reason, Throwable cause) {
-        // Publish the reason BEFORE flipping the flag so a reader that observes
-        // disabled==true via the subsequent CAS also sees the reason (CAS has
-        // happens-before semantics). Previously the order was reversed and a
-        // player joining in the narrow window between flag-flip and reason-write
-        // got a reason-free warning.
-        disableReason = reason;
-        if (!disabled.compareAndSet(false, true)) return;
+        String stamped = (reason == null || reason.isEmpty()) ? DEFAULT_REASON : reason;
+        // Single atomic publish: if this CAS succeeds, no other thread will ever
+        // see a different reason associated with this disable event.
+        if (!disableReason.compareAndSet(null, stamped)) return;
 
         if (cause != null) {
-            getLogger().at(Level.SEVERE).log("Sorting Chest DISABLED: %s", reason, cause);
+            getLogger().at(Level.SEVERE).log("Sorting Chest DISABLED: %s", stamped, cause);
         } else {
-            getLogger().at(Level.SEVERE).log("Sorting Chest DISABLED: %s", reason);
+            getLogger().at(Level.SEVERE).log("Sorting Chest DISABLED: %s", stamped);
         }
 
         try {
@@ -110,8 +115,11 @@ public final class SortingChestPlugin extends JavaPlugin {
      * per-joiner listener.
      */
     private String buildDisabledWarning() {
-        String reason = disableReason;
-        if (reason == null || reason.isEmpty()) {
+        String reason = disableReason.get();
+        if (reason == null) {
+            // Reader observed isDisabled()==true but the CAS state has been cleared
+            // (not possible in the current code path — we never reset — but defend
+            // anyway in case future code adds a reopen/reenable flow).
             return DISABLED_WARNING_PREFIX + DISABLED_WARNING_SUFFIX;
         }
         return DISABLED_WARNING_PREFIX + ": " + reason + DISABLED_WARNING_SUFFIX;
