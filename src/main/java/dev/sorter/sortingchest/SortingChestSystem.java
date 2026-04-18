@@ -48,9 +48,10 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
     // Migration path for v0.1.x upgrades: chunks saved before the SortingChestBlock
     // component existed don't auto-attach it on deserialization. Detect unmarked
     // container entities whose block type matches and back-attach the marker.
-    // Blocks declared with State.Definitions get exploded into per-state BlockType
-    // entries keyed as "*<Id>_State_Definitions_<State>". Match any state variant.
-    private static final String SORTING_CHEST_ID = "Sorting_Chest";
+    // Sorting_Chest.json declares State.Definitions, so BlockType.getId() at runtime
+    // is always of the form "*Sorting_Chest_State_Definitions_<State>" — prefix match
+    // is sufficient (see CLAUDE.md "State-variant block ids"). The bare "Sorting_Chest"
+    // id is never returned for a placed block.
     private static final String SORTING_CHEST_STATE_PREFIX = "*Sorting_Chest_State_Definitions_";
 
     private final SortingChestPlugin plugin;
@@ -58,10 +59,18 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
     private final ComponentType<ChunkStore, SortingChestBlock> sortingChestType;
     private final ComponentType<ChunkStore, ItemContainerBlock> itemContainerType;
     private final ResourceType<ChunkStore, SpatialResource<Ref<ChunkStore>, ChunkStore>> spatialType;
-    // Populated lazily the first time a given store ticks. WeakHashMap so destroyed
-    // stores don't linger; synchronized wrapper because the engine is free to fire
-    // delayedTick for different stores on different threads, and computeIfAbsent
-    // mutates the map.
+    // Positive-only cache: we populate this the first tick `resolveWorldFor`
+    // succeeds for a store and never again. A negative resolution (Universe.get()
+    // not up yet) is NOT cached, so we re-probe on the next tick until we
+    // succeed. That's the deliberate choice: caching a null (or Optional.empty)
+    // would be a permanent miss if the first tick for this store happened to
+    // race Universe startup, and migration for that store would never run.
+    // Universe.getWorlds() is O(number-of-worlds) which is tiny; the re-probe
+    // cost during the narrow startup window is negligible (sc-134).
+    //
+    // WeakHashMap so destroyed stores don't linger; synchronized wrapper because
+    // the engine is free to fire delayedTick for different stores on different
+    // threads.
     private final Map<Store<ChunkStore>, World> worldByStore =
         Collections.synchronizedMap(new WeakHashMap<>());
 
@@ -96,13 +105,35 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         }
     }
 
-    private void delayedTickImpl(float dt, int pass, Store<ChunkStore> store) {
+    private void delayedTickImpl(float dt, int pass, Store<ChunkStore> store) throws Throwable {
         if (store.getEntityCountFor(itemContainerType) == 0) return;
         int storeHash = System.identityHashCode(store);
 
         // We only need the World for block-type lookups during legacy-marker migration.
-        // Null is fine — just means we can't migrate on THIS store this tick.
-        World world = worldByStore.computeIfAbsent(store, this::resolveWorldFor);
+        // Null is fine — just means we can't migrate on THIS store this tick. Cache on
+        // success only; re-probe on miss (see comment on worldByStore).
+        final World world = lookupWorld(store);
+
+        // Decide up front whether this tick can run the legacy-marker migration.
+        // Off-thread delayedTick dispatch would make getChunkIfLoaded deadlock
+        // against the store lock held by forEachChunk (see CLAUDE.md), so gate
+        // migration on isInThread()+isStarted(). Log once per tick at FINE level
+        // if we're skipping so off-thread dispatch is diagnosable without
+        // spamming per-entity.
+        //
+        // Snapshot isStarted / isInThread into locals BEFORE computing canMigrate
+        // so the diagnostic log below reports the exact values that drove the
+        // decision. Re-reading world.isInThread() inside the log call could show
+        // a different (more recent) value if the world's thread state transitions
+        // between the snapshot and the log call — confusing in traces.
+        final boolean worldStarted = world != null && world.isStarted();
+        final boolean worldInThread = worldStarted && world.isInThread();
+        final boolean canMigrate = worldInThread;
+        if (world != null && !canMigrate) {
+            logger.at(Level.FINE).log(
+                "[sort] migration skipped this tick: world=%s started=%b inThread=%b store=%08x",
+                world.getName(), worldStarted, worldInThread, storeHash);
+        }
 
         // SpatialResource is populated by Hytale's ItemContainerBlockSpatialSystem
         // and maps every container-block entity to its world-space position. The
@@ -118,13 +149,10 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
             for (int i = 0; i < n; i++) {
                 Ref<ChunkStore> r = data.getData(i);
                 if (r == null) continue;
-                try {
-                    positionsByRefIndex.put(r.getIndex(), SpatialPositions.read(data, i));
-                } catch (Throwable t) {
-                    // Propagate so delayedTick's catch-all (next commit) can mark the
-                    // mod disabled cleanly instead of every tick re-throwing.
-                    throw new RuntimeException("SpatialPositions.read failed", t);
-                }
+                // SpatialPositions.read throws Throwable via MethodHandle.invoke. Let it
+                // propagate up to delayedTick's catch-all which handles the disable flow;
+                // wrapping here would hide the original exception type in the disable log.
+                positionsByRefIndex.put(r.getIndex(), SpatialPositions.read(data, i));
             }
         }
 
@@ -141,7 +169,9 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
                 Ref<ChunkStore> ref = chunk.getReferenceTo(i);
                 Pos pos = (ref != null) ? positionsByRefIndex.get(ref.getIndex()) : null;
                 boolean sortingChest = chunk.getComponent(i, sortingChestType) != null;
-                if (!sortingChest && world != null && pos != null && ref != null
+                // canMigrate was computed once per-tick above; see its comment for
+                // the deadlock-guard reasoning (sc-d06).
+                if (!sortingChest && canMigrate && pos != null && ref != null
                     && isSortingChestBlockAt(world, pos)) {
                     cmdBuf.addComponent(ref, sortingChestType);
                     sortingChest = true;
@@ -250,6 +280,22 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
     }
 
     /**
+     * Return the World that owns {@code store}, using the cache on hit and falling
+     * back to a live {@link #resolveWorldFor(Store)} probe on miss. Positive
+     * resolutions are cached; negative ones are NOT, so we re-probe next tick until
+     * Universe startup completes.
+     *
+     * Implemented via {@code computeIfAbsent} rather than a manual
+     * {@code get}/{@code put} pair: on a synchronized-map wrapper, {@code computeIfAbsent}
+     * holds the map lock across the compute and per the {@code Map} contract
+     * skips the insert when the mapping function returns {@code null}. That's
+     * exactly the positive-only atomic behavior we want, with no TOCTOU gap.
+     */
+    private World lookupWorld(Store<ChunkStore> store) {
+        return worldByStore.computeIfAbsent(store, this::resolveWorldFor);
+    }
+
+    /**
      * Best-effort lookup of the World that owns a given ChunkStore. Used only for
      * legacy-marker migration; if null, migration is skipped and we fall back to
      * the JSON-declared auto-attach path that covers fresh placements.
@@ -265,6 +311,16 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         return null;
     }
 
+    /**
+     * DEADLOCK PRECONDITION: the caller MUST have verified
+     * {@code world.isInThread() && world.isStarted()} before invoking this
+     * method, because {@code world.getChunkIfLoaded(long)} dispatches via
+     * {@code CompletableFuture.supplyAsync(lambda, world).join()} when called
+     * off the world thread. If this method is reached off-thread from inside
+     * a {@code store.forEachChunk} callback, the async lambda's attempt to
+     * acquire the store lock deadlocks against our caller. The current call
+     * site gates on {@code canMigrate} for exactly this reason. See sc-d06.
+     */
     private static boolean isSortingChestBlockAt(World world, Pos pos) {
         long key = ChunkUtil.indexChunkFromBlock(pos.x(), pos.z());
         WorldChunk chunk = world.getChunkIfLoaded(key);
@@ -274,7 +330,11 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         int lz = ChunkUtil.localCoordinate((long) Math.floor(pos.z()));
         BlockType type = chunk.getBlockType(lx, ly, lz);
         if (type == null) return false;
+        // getId() null-guard: no known Hytale path returns null, but an unexpected
+        // block-registration state (e.g. corrupt save, future engine change) that
+        // produced null would bubble up as an NPE and permanently disable the
+        // mod via the outer catch-all. Defensive null-safe match instead.
         String id = type.getId();
-        return SORTING_CHEST_ID.equals(id) || id.startsWith(SORTING_CHEST_STATE_PREFIX);
+        return id != null && id.startsWith(SORTING_CHEST_STATE_PREFIX);
     }
 }
