@@ -119,7 +119,7 @@ bd automatically syncs via Dolt:
 - ❌ Do NOT use external issue trackers
 - ❌ Do NOT duplicate tracking systems
 
-For more details, see README.md and docs/QUICKSTART.md.
+For more details, see `CLAUDE.md` (project-authoritative) and run `bd prime` for the full bd workflow reference.
 
 ## Landing the Plane (Session Completion)
 
@@ -148,3 +148,12 @@ For more details, see README.md and docs/QUICKSTART.md.
 - If push fails, resolve and retry until it succeeds
 
 <!-- END BEADS INTEGRATION -->
+
+## Project overrides to the beads boilerplate above
+
+The "Landing the Plane" block inside the beads integration markers is generic beads boilerplate. This project's workflow overrides several of its rules — where they conflict, prefer these:
+
+- **Never push directly to `main`.** `main` is branch-protected with required `build` + `claude-review` status checks. All work lands via PRs from short-lived feature branches (`feat/<topic>` for features, `fix/<topic>` for fixes). A forced direct push is rejected by GitHub's ruleset anyway; don't try.
+- **Never merge a PR without explicit user approval.** Claude-review approval is a gate, not a green light to merge. The human author merges.
+- **Destructive or shared-state actions require user confirmation.** Force-pushes, branch deletions, ruleset edits, CurseForge uploads, server restarts on the production Docker host — ask first every time. The beads block's "YOU must push, never stop before pushing" language does not apply on this project.
+- **Authoritative guide is `CLAUDE.md`.** AGENTS.md exists so non-Claude agent tools (Aider, Cursor, etc.) find the same bd workflow pointers, but CLAUDE.md has the project's true conventions including the overrides above.
