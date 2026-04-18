@@ -149,7 +149,16 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
                 Ref<ChunkStore> ref = chunk.getReferenceTo(i);
                 Pos pos = (ref != null) ? positionsByRefIndex.get(ref.getIndex()) : null;
                 boolean sortingChest = chunk.getComponent(i, sortingChestType) != null;
+                // World.getChunkIfLoaded has an isInThread() short-circuit: off the
+                // world thread it dispatches via CompletableFuture.supplyAsync(..., world).join(),
+                // which can deadlock against the store lock that forEachChunk holds. On
+                // observed Hytale builds delayedTick runs on the world thread (isInThread
+                // == true), but guard explicitly so a future engine change that dispatches
+                // us off-thread degrades to "migration skipped this tick" rather than a
+                // hung world tick (sc-d06). Also defend against stale attached Worlds whose
+                // tick thread is already gone (isStarted == false).
                 if (!sortingChest && world != null && pos != null && ref != null
+                    && world.isStarted() && world.isInThread()
                     && isSortingChestBlockAt(world, pos)) {
                     cmdBuf.addComponent(ref, sortingChestType);
                     sortingChest = true;
