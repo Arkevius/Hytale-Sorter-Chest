@@ -48,9 +48,10 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
     // Migration path for v0.1.x upgrades: chunks saved before the SortingChestBlock
     // component existed don't auto-attach it on deserialization. Detect unmarked
     // container entities whose block type matches and back-attach the marker.
-    // Blocks declared with State.Definitions get exploded into per-state BlockType
-    // entries keyed as "*<Id>_State_Definitions_<State>". Match any state variant.
-    private static final String SORTING_CHEST_ID = "Sorting_Chest";
+    // Sorting_Chest.json declares State.Definitions, so BlockType.getId() at runtime
+    // is always of the form "*Sorting_Chest_State_Definitions_<State>" — prefix match
+    // is sufficient (see CLAUDE.md "State-variant block ids"). The bare "Sorting_Chest"
+    // id is never returned for a placed block.
     private static final String SORTING_CHEST_STATE_PREFIX = "*Sorting_Chest_State_Definitions_";
 
     private final SortingChestPlugin plugin;
@@ -96,7 +97,7 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         }
     }
 
-    private void delayedTickImpl(float dt, int pass, Store<ChunkStore> store) {
+    private void delayedTickImpl(float dt, int pass, Store<ChunkStore> store) throws Throwable {
         if (store.getEntityCountFor(itemContainerType) == 0) return;
         int storeHash = System.identityHashCode(store);
 
@@ -118,13 +119,10 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
             for (int i = 0; i < n; i++) {
                 Ref<ChunkStore> r = data.getData(i);
                 if (r == null) continue;
-                try {
-                    positionsByRefIndex.put(r.getIndex(), SpatialPositions.read(data, i));
-                } catch (Throwable t) {
-                    // Propagate so delayedTick's catch-all (next commit) can mark the
-                    // mod disabled cleanly instead of every tick re-throwing.
-                    throw new RuntimeException("SpatialPositions.read failed", t);
-                }
+                // SpatialPositions.read throws Throwable via MethodHandle.invoke. Let it
+                // propagate up to delayedTick's catch-all which handles the disable flow;
+                // wrapping here would hide the original exception type in the disable log.
+                positionsByRefIndex.put(r.getIndex(), SpatialPositions.read(data, i));
             }
         }
 
@@ -274,7 +272,6 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         int lz = ChunkUtil.localCoordinate((long) Math.floor(pos.z()));
         BlockType type = chunk.getBlockType(lx, ly, lz);
         if (type == null) return false;
-        String id = type.getId();
-        return SORTING_CHEST_ID.equals(id) || id.startsWith(SORTING_CHEST_STATE_PREFIX);
+        return type.getId().startsWith(SORTING_CHEST_STATE_PREFIX);
     }
 }
