@@ -311,6 +311,16 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         return null;
     }
 
+    /**
+     * DEADLOCK PRECONDITION: the caller MUST have verified
+     * {@code world.isInThread() && world.isStarted()} before invoking this
+     * method, because {@code world.getChunkIfLoaded(long)} dispatches via
+     * {@code CompletableFuture.supplyAsync(lambda, world).join()} when called
+     * off the world thread. If this method is reached off-thread from inside
+     * a {@code store.forEachChunk} callback, the async lambda's attempt to
+     * acquire the store lock deadlocks against our caller. The current call
+     * site gates on {@code canMigrate} for exactly this reason. See sc-d06.
+     */
     private static boolean isSortingChestBlockAt(World world, Pos pos) {
         long key = ChunkUtil.indexChunkFromBlock(pos.x(), pos.z());
         WorldChunk chunk = world.getChunkIfLoaded(key);
@@ -320,6 +330,11 @@ public final class SortingChestSystem extends DelayedSystem<ChunkStore> {
         int lz = ChunkUtil.localCoordinate((long) Math.floor(pos.z()));
         BlockType type = chunk.getBlockType(lx, ly, lz);
         if (type == null) return false;
-        return type.getId().startsWith(SORTING_CHEST_STATE_PREFIX);
+        // getId() null-guard: no known Hytale path returns null, but an unexpected
+        // block-registration state (e.g. corrupt save, future engine change) that
+        // produced null would bubble up as an NPE and permanently disable the
+        // mod via the outer catch-all. Defensive null-safe match instead.
+        String id = type.getId();
+        return id != null && id.startsWith(SORTING_CHEST_STATE_PREFIX);
     }
 }
